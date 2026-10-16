@@ -45,7 +45,8 @@ def configureTCPPacketData(newPacket, endian):
     newPacket.TCP_header.get_data_offset(newPacket.buffer[tcpStartOffset+12:tcpStartOffset+13])
 
     return newPacket
-  
+
+
 
 def groupPacketsByConnection(packets):
     connections = {}
@@ -128,16 +129,16 @@ def getNumberOfBytesFromDestination(groupOfPackets, destinationPort):
     return numberOfBytes
 
 
-def getTotalNumberOfCompleateConnections(groupedPackets):
-    numberOfCompleateConnections = 0
+def getCompleteConnections(groupedPackets):
+    completeConnections = []
     for groupOfPackets in groupedPackets.values():
         status = getConnectionStatus(groupOfPackets)
 
         # maybe split into numbers and then use >
         if(status == "S1F1" or status == "S1F2" or status == "S2F1" or status == "S2F2"):
-            numberOfCompleateConnections+=1
+            completeConnections.append(groupOfPackets)
 
-    return numberOfCompleateConnections
+    return completeConnections
 
 
 def getTotalNumberOfResetConnections(groupedPackets):
@@ -180,6 +181,42 @@ def getTotalNumberOfBeforeCaptureConnections(groupedPackets):
             numberOfBeforeCaptureConnections+=1
 
     return numberOfBeforeCaptureConnections
+
+
+def durationStatistics(completeConnection):
+    durations = []
+
+    for groupOfPackets in completeConnection:
+        durations.append(groupOfPackets[len(groupOfPackets)-1].timestamp - groupOfPackets[0].timestamp)
+
+    return min(durations), sum(durations)/len(durations), max(durations)
+
+
+def RTTStatistics(completeConnection):
+    RTTs = []
+
+    for groupOfPackets in completeConnection:
+        RTTs.append(0)
+
+    return min(RTTs), sum(RTTs)/len(RTTs), max(RTTs)
+
+
+def numberOfPacketsStatistics(completeConnection):
+    numberOfPackets = []
+
+    for groupOfPackets in completeConnection:
+        numberOfPackets.append(len(groupOfPackets))
+
+    return min(numberOfPackets), sum(numberOfPackets)/len(numberOfPackets), max(numberOfPackets)
+
+def reciveWindowSizeStatistics(completeConnection):
+    reciveWindowSizes = []
+
+    for groupOfPackets in completeConnection:
+        for packet in groupOfPackets:
+            reciveWindowSizes.append(packet.TCP_header.window_size)
+
+    return min(reciveWindowSizes), sum(reciveWindowSizes)/len(reciveWindowSizes), max(reciveWindowSizes)
 
 
 def main():
@@ -258,12 +295,15 @@ def main():
 
     groupedPackets = groupPacketsByConnection(packets)
 
+    # pre-made this list because its used a lot in various sections
+    completeConnection = getCompleteConnections(groupedPackets)
+
     numberOfConnections = len(groupedPackets)
     print("A) Total number of connections:", numberOfConnections)
 
     print("\n-----------------------------------------\n")
 
-    print("B) Connections' details:")
+    print("B) Connections' details\n")
 
     connectionNumber = 1
     for groupOfPackets in groupedPackets.values():
@@ -327,10 +367,11 @@ def main():
 
 
     print("-----------------------------------------\n")
-    print("C) General")
+    print("C) General\n")
 
-    totalNumberOfCompleateConnections = getTotalNumberOfCompleateConnections(groupedPackets)
-    print("The total number of complete TCP connections:", totalNumberOfCompleateConnections)
+
+    totalNumberOfCompleteConnections = len(completeConnection)
+    print("The total number of complete TCP connections:", totalNumberOfCompleteConnections)
 
     totalNumberOfResetConnections = getTotalNumberOfResetConnections(groupedPackets)
     print("The number of reset TCP connections:", totalNumberOfResetConnections)
@@ -342,7 +383,28 @@ def main():
     print("The number of TCP connections established before the capture started:", totalNumberOfBeforeCaptureConnections)
 
     print("\n-----------------------------------------\n")
-    print("D) Complete TCP connections")
+    print("D) Complete TCP connections\n")
+
+    minimumDuration, meanDuration, maximumDuration = durationStatistics(completeConnection)
+    print("Minimum time duration:", minimumDuration)
+    print("Mean time duration:", meanDuration)
+    print("Maximum time duration:", maximumDuration, "\n")
+
+    minimumRTT, meanRTT, maximumRTT = RTTStatistics(completeConnection)
+    print("Minimum RTT value:", minimumRTT)
+    print("Mean RTT value:", meanRTT)
+    print("Maximum RTT value:", maximumRTT, "\n")
+
+    minimumNumberOfPackets, meanNumberOfPackets, maximumNumberOfPackets = numberOfPacketsStatistics(completeConnection)
+    print("Minimum number of packets including both send/received:", minimumNumberOfPackets)
+    print("Mean number of packets including both send/received:", meanNumberOfPackets)
+    print("Maximum number of packets including both send/received:", maximumNumberOfPackets, "\n")
+
+    minimumReciveWindowSize, meanReciveWindowSize, maximumReciveWindowSize = reciveWindowSizeStatistics(completeConnection)
+    print("Minimum receive window size including both send/received:", minimumReciveWindowSize)
+    print("Mean receive window size including both send/received:", meanReciveWindowSize)
+    print("Maximum receive window size including both send/received:", maximumReciveWindowSize)
+
 
 
 
