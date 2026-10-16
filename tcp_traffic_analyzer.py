@@ -11,18 +11,8 @@ def checkBigEndian(magicNum):
 
     return None
 
+
 def configureIPv4PacketData(newPacket, endian):
-
-    # ipStartOffset = 14
-
-    # # Probably a better way to extract the number of header bytes but if it ain't broke don't fix it
-    # IHLFirstByte = (struct.unpack(endian + "B", newPacket.buffer[ipStartOffset+0:ipStartOffset+1]))[0]
-    # IHL = IHLFirstByte & 0x0F # bitmask out the lower bytes
-    # headerBytes = IHL*4
-
-    # # H represents a unsigned short
-    # totalLength = (struct.unpack(endian + "H", newPacket.buffer[ipStartOffset+2:ipStartOffset+4]))[0]
-    # totalLengthBytes = totalLength*4
 
     ipStartOffset = 14
 
@@ -39,44 +29,8 @@ def configureIPv4PacketData(newPacket, endian):
     
     return newPacket
 
+
 def configureTCPPacketData(newPacket, endian):
-    # ethernetHeaderLength = 14
-    # ipHeaderLength = newPacket.IP_header.ip_header_len
-    # tcpStartOffset = ethernetHeaderLength + ipHeaderLength
-
-    # # TODO add some check for header length
-    # srcPort = (struct.unpack(endian + "H", newPacket.buffer[tcpStartOffset+0:tcpStartOffset+2]))[0]
-    # dstPort = (struct.unpack(endian + "H", newPacket.buffer[tcpStartOffset+2:tcpStartOffset+4]))[0]
-
-    # seqNumber = (struct.unpack(endian + "I", newPacket.buffer[tcpStartOffset+4:tcpStartOffset+8]))[0]
-    # ackNumber = (struct.unpack(endian + "I", newPacket.buffer[tcpStartOffset+8:tcpStartOffset+12]))[0]
-
-    # dataOffsetByte = (struct.unpack(endian + "B", newPacket.buffer[tcpStartOffset+12:tcpStartOffset+13]))[0]
-    # dataOffset = dataOffsetByte & 0xF0
-
-    # allFlagsByte = (struct.unpack(endian + "B", newPacket.buffer[tcpStartOffset+13:tcpStartOffset+14]))[0]
-    # # cwrFlag = allFlagsByte & 0x80 # 1000 0000 -> 0x80
-    # # eceFlag = allFlagsByte & 0x40 # 0100 0000 -> 0x40
-    # # urgFlag = allFlagsByte & 0x20 # 0010 0000 -> 0x20
-    # ackFlag = allFlagsByte & 0x10 # 0001 0000 -> 0x10
-    # # pshFlag = allFlagsByte & 0x08 # 0000 1000 -> 0x08
-    # rstFlag = allFlagsByte & 0x04 # 0000 0100 -> 0x04
-    # synFlag = allFlagsByte & 0x02 # 0000 0010 -> 0x02
-    # finFlag = allFlagsByte & 0x01 # 0000 0001 -> 0x01
-
-    # windowSize = (struct.unpack(endian + "H", newPacket.buffer[tcpStartOffset+14:tcpStartOffset+16]))[0]
-    # checkSum = (struct.unpack(endian + "H", newPacket.buffer[tcpStartOffset+16:tcpStartOffset+18]))[0]
-    # urgentPointer = (struct.unpack(endian + "H", newPacket.buffer[tcpStartOffset+18:tcpStartOffset+20]))[0]
-
-    # newPacket.TCP_header.src_port_set(srcPort)
-    # newPacket.TCP_header.dst_port_set(dstPort)
-    # newPacket.TCP_header.seq_num_set(seqNumber)
-    # newPacket.TCP_header.ack_num_set(ackNumber)
-    # newPacket.TCP_header.data_offset_set(dataOffset)
-    # newPacket.TCP_header.flags_set(ackFlag, rstFlag, synFlag, finFlag)
-    # newPacket.TCP_header.win_size_set(windowSize)
-    # newPacket.TCP_header.checksum = checkSum
-    # newPacket.TCP_header.ugp = urgentPointer
 
     ethernetHeaderLength = 14
     ipHeaderLength = newPacket.IP_header.ip_header_len
@@ -91,6 +45,141 @@ def configureTCPPacketData(newPacket, endian):
     newPacket.TCP_header.get_data_offset(newPacket.buffer[tcpStartOffset+12:tcpStartOffset+13])
 
     return newPacket
+  
+
+def groupPacketsByConnection(packets):
+    connections = {}
+
+    for individualPacket in packets:
+        srcIP = individualPacket.IP_header.src_ip
+        dstIP = individualPacket.IP_header.dst_ip
+
+        srcPort = individualPacket.TCP_header.src_port
+        dstPort = individualPacket.TCP_header.dst_port
+
+        direction1 = (srcIP, srcPort)
+        direction2 = (dstIP, dstPort)
+
+        sortedBothDirections = tuple(sorted((direction1, direction2)))
+
+        if sortedBothDirections not in connections:
+            connections[sortedBothDirections] = []
+
+        connections[sortedBothDirections].append(individualPacket)
+
+    return connections
+
+
+def getConnectionStatus(groupOfPackets):
+    synCount = 0
+    finCount = 0
+
+    for packet in groupOfPackets:
+
+        syn = packet.TCP_header.flags.get("SYN", 0)
+        fin = packet.TCP_header.flags.get("FIN", 0)
+        rst = packet.TCP_header.flags.get("RST", 0)
+
+        if rst:
+            return "R"
+
+        if syn:
+            synCount += 1
+
+        if fin:
+            finCount += 1
+
+    return f"S{synCount}F{finCount}"
+
+
+def getNumberOfPacketsFromSource(groupOfPackets, sourcePort):
+    numberOfPackets = 0
+    for packet in groupOfPackets:
+        if(packet.TCP_header.src_port == sourcePort):
+            numberOfPackets += 1
+
+    return numberOfPackets
+
+
+def getNumberOfPacketsFromDestination(groupOfPackets, destinationPort):
+    numberOfPackets = 0
+    for packet in groupOfPackets:
+        if(packet.TCP_header.src_port == destinationPort):
+            numberOfPackets += 1
+
+    return numberOfPackets
+
+
+def getNumberOfBytesFromSource(groupOfPackets, sourcePort):
+    numberOfBytes = 0
+    for packet in groupOfPackets:
+        if(packet.TCP_header.src_port == sourcePort):
+            numberOfBytes += (packet.IP_header.total_len - packet.IP_header.ip_header_len - packet.TCP_header.data_offset)
+            
+    return numberOfBytes
+
+
+def getNumberOfBytesFromDestination(groupOfPackets, destinationPort):
+    numberOfBytes = 0
+    for packet in groupOfPackets:
+        if(packet.TCP_header.src_port == destinationPort):
+            numberOfBytes += (packet.IP_header.total_len - packet.IP_header.ip_header_len - packet.TCP_header.data_offset)
+
+    return numberOfBytes
+
+
+def getTotalNumberOfCompleateConnections(groupedPackets):
+    numberOfCompleateConnections = 0
+    for groupOfPackets in groupedPackets.values():
+        status = getConnectionStatus(groupOfPackets)
+
+        # maybe split into numbers and then use >
+        if(status == "S1F1" or status == "S1F2" or status == "S2F1" or status == "S2F2"):
+            numberOfCompleateConnections+=1
+
+    return numberOfCompleateConnections
+
+
+def getTotalNumberOfResetConnections(groupedPackets):
+    numberOfResetConnections = 0
+    for groupOfPackets in groupedPackets.values():
+        status = getConnectionStatus(groupOfPackets)
+        if(status == "R"):
+            numberOfResetConnections+=1
+
+    return numberOfResetConnections
+
+
+def getTotalNumberOfOpenConnections(groupedPackets):
+    numberOfOpenConnections = 0
+
+    for groupOfPackets in groupedPackets.values():
+        finOccurred = False
+
+        for packet in groupOfPackets:
+            packet.TCP_header.flags
+
+            numberOfBytes = (packet.IP_header.total_len - packet.IP_header.ip_header_len - packet.TCP_header.data_offset)
+
+            # Check whether this packet contains a FIN.
+            if(packet.TCP_header.flags.get("FIN", 0)):
+                finOccurred = True
+
+            # Check for data in a packet after a FIN.
+            elif(finOccurred and numberOfBytes > 0):
+                numberOfOpenConnections += 1
+                break
+
+    return numberOfOpenConnections
+
+
+def getTotalNumberOfBeforeCaptureConnections(groupedPackets):
+    numberOfBeforeCaptureConnections = 0
+    for groupOfPackets in groupedPackets.values():
+        if groupOfPackets[0].TCP_header.flags.get("SYN", 0) != 1:
+            numberOfBeforeCaptureConnections+=1
+
+    return numberOfBeforeCaptureConnections
 
 
 def main():
@@ -167,12 +256,94 @@ def main():
             packets.append(newPacket)
 
 
-    print("Total packets:", len(packets))
+    groupedPackets = groupPacketsByConnection(packets)
 
-    for individualPacket in packets:
-        print(individualPacket.packet_No, individualPacket.TCP_header.seq_num)
+    numberOfConnections = len(groupedPackets)
+    print("A) Total number of connections:", numberOfConnections)
+
+    print("\n-----------------------------------------\n")
+
+    print("B) Connections' details:")
+
+    connectionNumber = 1
+    for groupOfPackets in groupedPackets.values():
+        
+        print("Connection Number:", connectionNumber)
+
+        # Take source address from first packet in group
+        connectionSourceAddress = groupOfPackets[0].IP_header.src_ip
+        print("Source Address:", connectionSourceAddress)
+
+        # Take destination address from first packet in group
+        connectionDestinationAddress = groupOfPackets[0].IP_header.dst_ip
+        print("Destination Address:", connectionDestinationAddress)
+
+        # Take source port from first packet in group
+        connectionSourcePort = groupOfPackets[0].TCP_header.src_port
+        print("Source Port:", connectionSourcePort)
+
+        # Take destination port from first packet in group
+        connectionDestinationPort = groupOfPackets[0].TCP_header.dst_port
+        print("Destination Port:", connectionDestinationPort)
+
+        connectionStatus = getConnectionStatus(groupOfPackets)
+        print("Status:", connectionStatus)
+
+        # Take the start time from the first packet in the group
+        firstPacketStartTime = groupOfPackets[0].timestamp
+        print("Start Time:", firstPacketStartTime)
+
+        # Take the end time from the last packet in the group
+        lastPacketEndTime = groupOfPackets[len(groupOfPackets)-1].timestamp
+        print("End Time:", lastPacketEndTime)
+
+        # Subtract the start time from the end time
+        duration = lastPacketEndTime - firstPacketStartTime
+        print("Duration:", duration)
+
+        # Using the source of the fisrt packet compare the source address of the packet to the expected source value
+        numberOfPacketsFromSource = getNumberOfPacketsFromSource(groupOfPackets, groupOfPackets[0].TCP_header.src_port)
+        print("Number of packets sent from Source to Destination:", numberOfPacketsFromSource)
+
+        # Using the destination of the fisrt packet compare the source address of the packet to the expected destination value
+        numberOfPacketsFromDestination = getNumberOfPacketsFromDestination(groupOfPackets, groupOfPackets[0].TCP_header.dst_port)
+        print("Number of packets sent from Destination to Source:", numberOfPacketsFromDestination)
+
+        totalNumberOfPackets = len (groupOfPackets)
+        print("Total number of packets:", totalNumberOfPackets)
+
+        numberOfBytesFromSource = getNumberOfBytesFromSource(groupOfPackets, groupOfPackets[0].TCP_header.src_port)
+        print("Number of data bytes sent from Source to Destination:", numberOfBytesFromSource)
+
+        numberOfBytesFromDestination = getNumberOfBytesFromDestination(groupOfPackets, groupOfPackets[0].TCP_header.dst_port)
+        print("Number of data bytes sent from Destination to Source:", numberOfBytesFromDestination)
+
+        totalNumberOfBytes = numberOfBytesFromSource + numberOfBytesFromDestination
+        print("Total number of data bytes:", totalNumberOfBytes)
+
+        print("END\n")
+
+        connectionNumber+=1
 
 
-            
+    print("-----------------------------------------\n")
+    print("C) General")
+
+    totalNumberOfCompleateConnections = getTotalNumberOfCompleateConnections(groupedPackets)
+    print("The total number of complete TCP connections:", totalNumberOfCompleateConnections)
+
+    totalNumberOfResetConnections = getTotalNumberOfResetConnections(groupedPackets)
+    print("The number of reset TCP connections:", totalNumberOfResetConnections)
+
+    totalNumberOfOpenConnections = getTotalNumberOfOpenConnections(groupedPackets)
+    print("The number of TCP connections that were still open when the trace capture ended:", totalNumberOfOpenConnections)
+
+    totalNumberOfBeforeCaptureConnections = getTotalNumberOfBeforeCaptureConnections(groupedPackets)
+    print("The number of TCP connections established before the capture started:", totalNumberOfBeforeCaptureConnections)
+
+    print("\n-----------------------------------------\n")
+    print("D) Complete TCP connections")
+
+
 
 main()
