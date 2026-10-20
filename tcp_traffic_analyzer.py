@@ -1,5 +1,6 @@
 from packet_struct import *
 import sys
+import statistics
 
 def checkBigEndian(magicNum):
 
@@ -15,11 +16,15 @@ def checkBigEndian(magicNum):
 def configureIPv4PacketData(newPacket, endian):
 
     ipStartOffset = 14
+    isTCP = True
 
     newPacket.IP_header.get_header_len(newPacket.buffer[ipStartOffset+0:ipStartOffset+1])
     newPacket.IP_header.get_total_len(newPacket.buffer[ipStartOffset+2:ipStartOffset+4])
     newPacket.IP_header.get_IP(newPacket.buffer[ipStartOffset + 12:ipStartOffset + 16], newPacket.buffer[ipStartOffset + 16:ipStartOffset + 20]) # Given tutorial code get_IP function seems to be a set function?
+    protocol = newPacket.buffer[ipStartOffset+9]
 
+    if(protocol != 6):
+        isTCP = False
     if(newPacket.IP_header.ip_header_len < 20):
         print("Error: IPv4 header length too small")
         return None
@@ -27,7 +32,7 @@ def configureIPv4PacketData(newPacket, endian):
         print("Error: IPv4 header length too large")
         return None
     
-    return newPacket
+    return newPacket, isTCP
 
 
 def configureTCPPacketData(newPacket, endian):
@@ -74,6 +79,7 @@ def groupPacketsByConnection(packets):
 def getConnectionStatus(groupOfPackets):
     synCount = 0
     finCount = 0
+    rCount = 0
 
     for packet in groupOfPackets:
 
@@ -82,7 +88,7 @@ def getConnectionStatus(groupOfPackets):
         rst = packet.TCP_header.flags.get("RST", 0)
 
         if rst:
-            return "R"
+            rCount += 1
 
         if syn:
             synCount += 1
@@ -90,7 +96,8 @@ def getConnectionStatus(groupOfPackets):
         if fin:
             finCount += 1
 
-    return f"S{synCount}F{finCount}"
+
+    return f"R{rCount}S{synCount}F{finCount}"
 
 
 def getNumberOfPacketsFromSource(groupOfPackets, sourcePort):
@@ -133,9 +140,9 @@ def getCompleteConnections(groupedPackets):
     completeConnections = []
     for groupOfPackets in groupedPackets.values():
         status = getConnectionStatus(groupOfPackets)
+        r, s, f = [int(char) for char in status if char.isdigit()]
 
-        # maybe split into numbers and then use >
-        if(status == "S1F1" or status == "S1F2" or status == "S2F1" or status == "S2F2"):
+        if(s>=1 and f>=1):
             completeConnections.append(groupOfPackets)
 
     return completeConnections
@@ -145,7 +152,9 @@ def getTotalNumberOfResetConnections(groupedPackets):
     numberOfResetConnections = 0
     for groupOfPackets in groupedPackets.values():
         status = getConnectionStatus(groupOfPackets)
-        if(status == "R"):
+        r, s, f = [int(char) for char in status if char.isdigit()]
+
+        if(r>0):
             numberOfResetConnections+=1
 
     return numberOfResetConnections
@@ -177,7 +186,7 @@ def getTotalNumberOfOpenConnections(groupedPackets):
 def getTotalNumberOfBeforeCaptureConnections(groupedPackets):
     numberOfBeforeCaptureConnections = 0
     for groupOfPackets in groupedPackets.values():
-        if groupOfPackets[0].TCP_header.flags.get("SYN", 0) != 1:
+        if groupOfPackets[0].TCP_header.flags.get("SYN", 0) < 1:
             numberOfBeforeCaptureConnections+=1
 
     return numberOfBeforeCaptureConnections
@@ -189,16 +198,65 @@ def durationStatistics(completeConnection):
     for groupOfPackets in completeConnection:
         durations.append(groupOfPackets[len(groupOfPackets)-1].timestamp - groupOfPackets[0].timestamp)
 
-    return min(durations), sum(durations)/len(durations), max(durations)
+    if(not durations):
+        return None, None, None
+    
+    return min(durations), statistics.mean(durations), max(durations)
 
 
-def RTTStatistics(completeConnection):
+def RTTStatistics(completeConnections):
     RTTs = []
 
-    for groupOfPackets in completeConnection:
-        RTTs.append(0)
+    for groupOfPackets in completeConnections:
+        i = 0
+        for packet in groupOfPackets:
 
-    return min(RTTs), sum(RTTs)/len(RTTs), max(RTTs)
+            # Only consider packets sent from client to server.
+            dataLength = (packet.IP_header.total_len - packet.IP_header.ip_header_len - packet.TCP_header.data_offset)
+
+            flags = packet.TCP_header.flags
+
+            # Determine how much sequence space this packet consumes.
+            sequenceLength = dataLength
+
+            if flags.get("SYN", 0):
+                sequenceLength += 1
+
+            if flags.get("FIN", 0):
+                sequenceLength += 1
+
+            # Ignore packets that consume no sequence space.
+            if sequenceLength <= 0:
+                i+=1
+                continue
+
+            expectedAck = (packet.TCP_header.seq_num + sequenceLength) & 0xFFFFFFFF
+
+            for ackPacket in groupOfPackets[i + 1:]:
+
+                # ACK must travel in the opposite direction.
+                if (ackPacket.IP_header.src_ip == packet.IP_header.dst_ip
+                    and ackPacket.IP_header.dst_ip == packet.IP_header.src_ip
+                    and ackPacket.TCP_header.src_port == packet.TCP_header.dst_port
+                    and ackPacket.TCP_header.dst_port == packet.TCP_header.src_port
+                ):
+                    if ackPacket.TCP_header.flags.get("ACK", 0):
+                        if ackPacket.TCP_header.ack_num == expectedAck:
+                            packet.get_RTT_value(ackPacket)
+                            packet.RTT_flag = True
+                            break
+
+            i+=1
+
+    for groupOfPackets in completeConnections:
+        for packet in groupOfPackets:
+            if packet.RTT_flag:
+                RTTs.append(packet.RTT_value)
+
+    if not RTTs:
+        return None, None, None
+
+    return min(RTTs), statistics.mean(RTTs), max(RTTs)
 
 
 def numberOfPacketsStatistics(completeConnection):
@@ -207,7 +265,10 @@ def numberOfPacketsStatistics(completeConnection):
     for groupOfPackets in completeConnection:
         numberOfPackets.append(len(groupOfPackets))
 
-    return min(numberOfPackets), sum(numberOfPackets)/len(numberOfPackets), max(numberOfPackets)
+    if(not numberOfPackets):
+        return None, None, None
+
+    return min(numberOfPackets), statistics.mean(numberOfPackets), max(numberOfPackets)
 
 def reciveWindowSizeStatistics(completeConnection):
     reciveWindowSizes = []
@@ -216,7 +277,10 @@ def reciveWindowSizeStatistics(completeConnection):
         for packet in groupOfPackets:
             reciveWindowSizes.append(packet.TCP_header.window_size)
 
-    return min(reciveWindowSizes), sum(reciveWindowSizes)/len(reciveWindowSizes), max(reciveWindowSizes)
+    if(not reciveWindowSizes):
+        return None, None, None
+    
+    return min(reciveWindowSizes), statistics.mean(reciveWindowSizes), max(reciveWindowSizes)
 
 
 def main():
@@ -283,14 +347,15 @@ def main():
             newPacket.packet_No_set(numberOfPackets)
             newPacket.buffer = packetData
 
-            newPacket = configureIPv4PacketData(newPacket, endian)
+            newPacket, isTCP = configureIPv4PacketData(newPacket, endian)
             if(newPacket == None):
                 break
             newPacket = configureTCPPacketData(newPacket, endian)
             if(newPacket == None):
                 break
 
-            packets.append(newPacket)
+            if(isTCP):
+                packets.append(newPacket)
 
 
     groupedPackets = groupPacketsByConnection(packets)
@@ -331,15 +396,15 @@ def main():
 
         # Take the start time from the first packet in the group
         firstPacketStartTime = groupOfPackets[0].timestamp
-        print("Start Time:", firstPacketStartTime)
+        print("Start Time:", firstPacketStartTime, "s")
 
         # Take the end time from the last packet in the group
         lastPacketEndTime = groupOfPackets[len(groupOfPackets)-1].timestamp
-        print("End Time:", lastPacketEndTime)
+        print("End Time:", lastPacketEndTime, "s")
 
         # Subtract the start time from the end time
         duration = lastPacketEndTime - firstPacketStartTime
-        print("Duration:", duration)
+        print("Duration:", duration, "s")
 
         # Using the source of the fisrt packet compare the source address of the packet to the expected source value
         numberOfPacketsFromSource = getNumberOfPacketsFromSource(groupOfPackets, groupOfPackets[0].TCP_header.src_port)
@@ -386,14 +451,14 @@ def main():
     print("D) Complete TCP connections\n")
 
     minimumDuration, meanDuration, maximumDuration = durationStatistics(completeConnection)
-    print("Minimum time duration:", minimumDuration)
-    print("Mean time duration:", meanDuration)
-    print("Maximum time duration:", maximumDuration, "\n")
+    print("Minimum time duration:", minimumDuration, "s")
+    print("Mean time duration:", meanDuration, "s")
+    print("Maximum time duration:", maximumDuration, "s", "\n")
 
     minimumRTT, meanRTT, maximumRTT = RTTStatistics(completeConnection)
-    print("Minimum RTT value:", minimumRTT)
-    print("Mean RTT value:", meanRTT)
-    print("Maximum RTT value:", maximumRTT, "\n")
+    print("Minimum RTT value:", minimumRTT, "s")
+    print("Mean RTT value:", meanRTT, "s")
+    print("Maximum RTT value:", maximumRTT, "s", "\n")
 
     minimumNumberOfPackets, meanNumberOfPackets, maximumNumberOfPackets = numberOfPacketsStatistics(completeConnection)
     print("Minimum number of packets including both send/received:", minimumNumberOfPackets)
