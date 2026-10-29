@@ -128,7 +128,8 @@ class TCP_Header:
         self.flags_set(ack, rst, syn, fin)
         return None
     
-    def get_window_size(self,buffer):
+    def get_window_size(self,buffer1,buffer2):
+        buffer = buffer2+buffer1
         size = struct.unpack('H',buffer)[0]
         self.win_size_set(size)
         return None

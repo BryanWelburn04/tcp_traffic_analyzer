@@ -46,7 +46,7 @@ def configureTCPPacketData(newPacket, endian):
     newPacket.TCP_header.get_seq_num(newPacket.buffer[tcpStartOffset+4:tcpStartOffset+8])
     newPacket.TCP_header.get_ack_num(newPacket.buffer[tcpStartOffset+8:tcpStartOffset+12])
     newPacket.TCP_header.get_flags(newPacket.buffer[tcpStartOffset+13:tcpStartOffset+14])
-    newPacket.TCP_header.get_window_size(newPacket.buffer[tcpStartOffset+14:tcpStartOffset+16])
+    newPacket.TCP_header.get_window_size(newPacket.buffer[tcpStartOffset+14:tcpStartOffset+15], newPacket.buffer[tcpStartOffset+15:tcpStartOffset+16])
     newPacket.TCP_header.get_data_offset(newPacket.buffer[tcpStartOffset+12:tcpStartOffset+13])
 
     return newPacket
@@ -98,6 +98,17 @@ def getConnectionStatus(groupOfPackets):
 
 
     return f"R{rCount}S{synCount}F{finCount}"
+
+def getConnectionEndTime(groupOfPackets):
+    endTime = 0
+    for packet in groupOfPackets:
+        packet.TCP_header.flags
+
+        # Check whether this packet contains a FIN.
+        if(packet.TCP_header.flags.get("FIN", 0)):
+            endTime = packet.timestamp
+    
+    return endTime
 
 
 def getNumberOfPacketsFromSource(groupOfPackets, sourcePort):
@@ -196,7 +207,15 @@ def durationStatistics(completeConnection):
     durations = []
 
     for groupOfPackets in completeConnection:
-        durations.append(groupOfPackets[len(groupOfPackets)-1].timestamp - groupOfPackets[0].timestamp)
+        endTime = 0
+        for packet in groupOfPackets:
+            packet.TCP_header.flags
+    
+            # Check whether this packet contains a FIN.
+            if(packet.TCP_header.flags.get("FIN", 0)):
+                endTime = packet.timestamp
+        
+        durations.append(endTime - groupOfPackets[0].timestamp)
 
     if(not durations):
         return None, None, None
@@ -342,6 +361,7 @@ def main():
 
             numberOfPackets+=1
 
+            # Create new instance of packet struct
             newPacket = packet()
             newPacket.timestamp_set(packetHeader[0:4], packetHeader[4:8], origTime)
             newPacket.packet_No_set(numberOfPackets)
@@ -391,40 +411,49 @@ def main():
         connectionDestinationPort = groupOfPackets[0].TCP_header.dst_port
         print("Destination Port:", connectionDestinationPort)
 
+        # get the number of R's S's and F's (RST, SYN, FIN)
         connectionStatus = getConnectionStatus(groupOfPackets)
         print("Status:", connectionStatus)
 
-        # Take the start time from the first packet in the group
-        firstPacketStartTime = groupOfPackets[0].timestamp
-        print("Start Time:", firstPacketStartTime, "s")
+        # only continue for complete connections
+        r, s, f = [int(char) for char in connectionStatus if char.isdigit()]
+        if(s>=1 and f>=1):
 
-        # Take the end time from the last packet in the group
-        lastPacketEndTime = groupOfPackets[len(groupOfPackets)-1].timestamp
-        print("End Time:", lastPacketEndTime, "s")
+            # Take the start time from the first packet in the group
+            firstPacketStartTime = groupOfPackets[0].timestamp
+            print("Start Time:", round(firstPacketStartTime,5), "s")
 
-        # Subtract the start time from the end time
-        duration = lastPacketEndTime - firstPacketStartTime
-        print("Duration:", duration, "s")
+            # Take the end time from the last FIN in the group
+            lastPacketEndTime = getConnectionEndTime(groupOfPackets)
+            print("End Time:", round(lastPacketEndTime, 5), "s")
 
-        # Using the source of the fisrt packet compare the source address of the packet to the expected source value
-        numberOfPacketsFromSource = getNumberOfPacketsFromSource(groupOfPackets, groupOfPackets[0].TCP_header.src_port)
-        print("Number of packets sent from Source to Destination:", numberOfPacketsFromSource)
+            # Subtract the start time from the end time
+            duration = lastPacketEndTime - firstPacketStartTime
+            print("Duration:", round(duration, 5), "s")
 
-        # Using the destination of the fisrt packet compare the source address of the packet to the expected destination value
-        numberOfPacketsFromDestination = getNumberOfPacketsFromDestination(groupOfPackets, groupOfPackets[0].TCP_header.dst_port)
-        print("Number of packets sent from Destination to Source:", numberOfPacketsFromDestination)
+            # Using the source of the fisrt packet compare the source address of the packet to the expected source value
+            numberOfPacketsFromSource = getNumberOfPacketsFromSource(groupOfPackets, groupOfPackets[0].TCP_header.src_port)
+            print("Number of packets sent from Source to Destination:", numberOfPacketsFromSource)
 
-        totalNumberOfPackets = len (groupOfPackets)
-        print("Total number of packets:", totalNumberOfPackets)
+            # Using the destination of the fisrt packet compare the source address of the packet to the expected destination value
+            numberOfPacketsFromDestination = getNumberOfPacketsFromDestination(groupOfPackets, groupOfPackets[0].TCP_header.dst_port)
+            print("Number of packets sent from Destination to Source:", numberOfPacketsFromDestination)
 
-        numberOfBytesFromSource = getNumberOfBytesFromSource(groupOfPackets, groupOfPackets[0].TCP_header.src_port)
-        print("Number of data bytes sent from Source to Destination:", numberOfBytesFromSource)
+            # Take the total length of the groupOfPackets
+            totalNumberOfPackets = len (groupOfPackets)
+            print("Total number of packets:", totalNumberOfPackets)
 
-        numberOfBytesFromDestination = getNumberOfBytesFromDestination(groupOfPackets, groupOfPackets[0].TCP_header.dst_port)
-        print("Number of data bytes sent from Destination to Source:", numberOfBytesFromDestination)
+            # Calculate number of bytes send from src
+            numberOfBytesFromSource = getNumberOfBytesFromSource(groupOfPackets, groupOfPackets[0].TCP_header.src_port)
+            print("Number of data bytes sent from Source to Destination:", numberOfBytesFromSource, "B")
 
-        totalNumberOfBytes = numberOfBytesFromSource + numberOfBytesFromDestination
-        print("Total number of data bytes:", totalNumberOfBytes)
+            # Calculate number of bytes sent from dest
+            numberOfBytesFromDestination = getNumberOfBytesFromDestination(groupOfPackets, groupOfPackets[0].TCP_header.dst_port)
+            print("Number of data bytes sent from Destination to Source:", numberOfBytesFromDestination, "B")
+
+            # Calculate number of bytes send in both directions
+            totalNumberOfBytes = numberOfBytesFromSource + numberOfBytesFromDestination
+            print("Total number of data bytes:", totalNumberOfBytes, "B")
 
         print("END\n")
 
@@ -434,41 +463,48 @@ def main():
     print("-----------------------------------------\n")
     print("C) General\n")
 
-
+    # Check number of connections with S>0 and F>0
     totalNumberOfCompleteConnections = len(completeConnection)
     print("The total number of complete TCP connections:", totalNumberOfCompleteConnections)
 
+    # Check number of connections with R>0
     totalNumberOfResetConnections = getTotalNumberOfResetConnections(groupedPackets)
     print("The number of reset TCP connections:", totalNumberOfResetConnections)
 
+    # Check number of connections with F=0
     totalNumberOfOpenConnections = getTotalNumberOfOpenConnections(groupedPackets)
     print("The number of TCP connections that were still open when the trace capture ended:", totalNumberOfOpenConnections)
 
+    # Check number of connections with data before S flag (while S=0)
     totalNumberOfBeforeCaptureConnections = getTotalNumberOfBeforeCaptureConnections(groupedPackets)
     print("The number of TCP connections established before the capture started:", totalNumberOfBeforeCaptureConnections)
 
     print("\n-----------------------------------------\n")
     print("D) Complete TCP connections\n")
 
+    # Calculate all the duration stats
     minimumDuration, meanDuration, maximumDuration = durationStatistics(completeConnection)
-    print("Minimum time duration:", minimumDuration, "s")
-    print("Mean time duration:", meanDuration, "s")
-    print("Maximum time duration:", maximumDuration, "s", "\n")
+    print("Minimum time duration:", round(minimumDuration, 5), "s")
+    print("Mean time duration:", round(meanDuration, 5), "s")
+    print("Maximum time duration:", round(maximumDuration, 5), "s", "\n")
 
+    # Calculate all the RTT stats
     minimumRTT, meanRTT, maximumRTT = RTTStatistics(completeConnection)
-    print("Minimum RTT value:", minimumRTT, "s")
-    print("Mean RTT value:", meanRTT, "s")
-    print("Maximum RTT value:", maximumRTT, "s", "\n")
+    print("Minimum RTT value:", round(minimumRTT, 5), "s")
+    print("Mean RTT value:", round(meanRTT, 5), "s")
+    print("Maximum RTT value:", round(maximumRTT, 5), "s", "\n")
 
+    # Calculate all the number of packets stats
     minimumNumberOfPackets, meanNumberOfPackets, maximumNumberOfPackets = numberOfPacketsStatistics(completeConnection)
     print("Minimum number of packets including both send/received:", minimumNumberOfPackets)
-    print("Mean number of packets including both send/received:", meanNumberOfPackets)
+    print("Mean number of packets including both send/received:", round(meanNumberOfPackets, 5))
     print("Maximum number of packets including both send/received:", maximumNumberOfPackets, "\n")
 
+    # Calculate all the rwnd size stats
     minimumReciveWindowSize, meanReciveWindowSize, maximumReciveWindowSize = reciveWindowSizeStatistics(completeConnection)
-    print("Minimum receive window size including both send/received:", minimumReciveWindowSize)
-    print("Mean receive window size including both send/received:", meanReciveWindowSize)
-    print("Maximum receive window size including both send/received:", maximumReciveWindowSize)
+    print("Minimum receive window size including both send/received:", minimumReciveWindowSize, "B")
+    print("Mean receive window size including both send/received:", round(meanReciveWindowSize, 5), "B")
+    print("Maximum receive window size including both send/received:", maximumReciveWindowSize, "B")
 
 
 
